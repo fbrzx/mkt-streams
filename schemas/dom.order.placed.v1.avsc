@@ -1,0 +1,29 @@
+{
+  "type": "record",
+  "name": "OrderPlaced",
+  "namespace": "dom.order",
+  "doc": "Order placement transactional fact for downstream activation.",
+  "fields": [
+    {"name": "order_id", "type": "string"},
+    {"name": "customer_id", "type": "string"},
+    {"name": "order_total", "type": "double"},
+    {
+      "name": "items",
+      "type": {
+        "type": "array",
+        "items": {
+          "name": "OrderItem",
+          "type": "record",
+          "fields": [
+            {"name": "sku", "type": "string"},
+            {"name": "quantity", "type": "int"},
+            {"name": "price", "type": "double"}
+          ]
+        }
+      }
+    },
+    {"name": "currency", "type": "string", "default": "USD"},
+    {"name": "channel", "type": ["null", "string"], "default": null},
+    {"name": "placed_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}

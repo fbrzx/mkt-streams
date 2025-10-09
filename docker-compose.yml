@@ -1,0 +1,97 @@
+version: "3.9"
+services:
+  redpanda:
+    image: redpandadata/redpanda:v23.3.7
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --nodename=redpanda
+      - --reserve-memory=0M
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092,PLAINTEXT_HOST://localhost:29092
+      - --schema-registry-addr=0.0.0.0:8081
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "-X", "brokers=localhost:29092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.3
+    container_name: schema-registry
+    depends_on:
+      - redpanda
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://redpanda:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_DEBUG: "true"
+    ports:
+      - "8081:8081"
+
+  rest-proxy:
+    image: confluentinc/cp-kafka-rest:7.5.3
+    container_name: rest-proxy
+    depends_on:
+      - redpanda
+      - schema-registry
+    environment:
+      KAFKA_REST_BOOTSTRAP_SERVERS: PLAINTEXT://redpanda:9092
+      KAFKA_REST_LISTENERS: http://0.0.0.0:8082
+      KAFKA_REST_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KAFKA_REST_HOST_NAME: rest-proxy
+    ports:
+      - "8082:8082"
+
+  ksqldb:
+    image: confluentinc/ksqldb-server:0.29.0
+    container_name: ksqldb
+    depends_on:
+      - redpanda
+      - schema-registry
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: redpanda:9092
+      KSQL_KSQL_SERVICE_ID: marketing-engine
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_STREAMS_AUTO_OFFSET_RESET: earliest
+      KSQL_KSQL_INTERNAL_TOPIC_REPLICAS: "1"
+      KSQL_KSQL_STREAMS_REPLICATION_FACTOR: "1"
+    ports:
+      - "8088:8088"
+
+  ksql-cli:
+    image: confluentinc/ksqldb-cli:0.29.0
+    container_name: ksql-cli
+    depends_on:
+      - ksqldb
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./ksql:/scripts
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - redpanda
+      - schema-registry
+    environment:
+      KAFKA_CLUSTERS_0_NAME: marketing-engine
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: redpanda:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KSQLDBSERVER: http://ksqldb:8088
+    ports:
+      - "8080:8080"
+
+volumes:
+  redpanda-data:

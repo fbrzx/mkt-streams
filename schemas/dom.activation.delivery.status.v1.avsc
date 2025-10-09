@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "ActivationDeliveryStatus",
+  "namespace": "dom.activation",
+  "doc": "Activation delivery status messages emitted by downstream activation platforms.",
+  "fields": [
+    {"name": "activation_id", "type": "string"},
+    {"name": "order_id", "type": "string"},
+    {"name": "customer_id", "type": "string"},
+    {"name": "channel", "type": "string"},
+    {"name": "status", "type": "string"},
+    {"name": "delivered_at", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+    {"name": "attempts", "type": "int", "default": 0}
+  ]
+}

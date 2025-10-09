@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "SegmentMaterialized",
+  "namespace": "dom.segment",
+  "doc": "Materialized segment assignments for marketing audiences.",
+  "fields": [
+    {"name": "customer_id", "type": "string"},
+    {"name": "segment", "type": "string"},
+    {"name": "score", "type": "double"},
+    {"name": "materialized_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}
