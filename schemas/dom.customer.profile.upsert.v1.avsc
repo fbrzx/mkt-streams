@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "CustomerProfileUpsert",
+  "namespace": "dom.customer",
+  "doc": "Customer profile upsert event for the unified marketing profile store.",
+  "fields": [
+    {"name": "customer_id", "type": "string"},
+    {"name": "email", "type": ["null", "string"], "default": null},
+    {"name": "first_name", "type": ["null", "string"], "default": null},
+    {"name": "last_name", "type": ["null", "string"], "default": null},
+    {"name": "created_at", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "lifecycle_stage", "type": ["null", "string"], "default": null},
+    {"name": "is_active", "type": "boolean", "default": true}
+  ]
+}
