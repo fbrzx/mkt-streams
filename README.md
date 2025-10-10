@@ -48,7 +48,7 @@ PY
    make up
    ```
 
-   This launches Redpanda, Schema Registry, REST Proxy, ksqlDB, ksqlDB CLI container, and Kafka UI.
+   This launches Redpanda, Schema Registry, REST Proxy, ksqlDB, ksqlDB CLI container, Kafka UI, and the web demo console at [http://localhost:8000](http://localhost:8000). Use the console to monitor the Delta checkpoints and publish extra demo events while the services run.
 
 2. **Register Avro schemas**
 
@@ -58,7 +58,15 @@ PY
 
    The script posts each `.avsc` under `schemas/` to the Schema Registry. It is safe to rerun at any time.
 
-3. **Seed demo data**
+3. **Ensure Kafka topics exist**
+
+   ```bash
+   make topics
+   ```
+
+   This pre-creates every topic used by the topology so you can stand up ksqlDB before any data is produced.
+
+4. **Seed demo data** *(optional — run later if you want the topology without data)*
 
    ```bash
    make seed
@@ -66,15 +74,15 @@ PY
 
    Customer profiles, order events, and activation statuses are produced via the REST Proxy using the registered Avro schemas.
 
-4. **Deploy the ksqlDB topology**
+5. **Deploy the ksqlDB topology**
 
    ```bash
    make ksql
    ```
 
-   The CLI pipes `ksql/streams.sql` into the ksqlDB server, creating the base streams, tables, and segment materialization stream.
+   The helper waits for ksqlDB to be ready and then pipes `ksql/streams.sql` into the server, creating the base streams, tables, and segment materialization stream.
 
-5. **Run the Spark streaming jobs (containerized)**
+6. **Run the Spark streaming jobs (containerized)**
 
    ```bash
    make spark
@@ -91,7 +99,7 @@ PY
 
    Each stream maintains checkpoints beneath `/tmp/delta/` and writes Delta tables under `./delta/`.
 
-6. **Explore the data**
+7. **Explore the data**
 
    - Browse topics and schemas at [Kafka UI](http://localhost:8080/).
    - Inspect ksqlDB streams/tables at [ksqlDB REST API](http://localhost:8088/).
@@ -101,13 +109,24 @@ PY
      docker compose run --rm --entrypoint bash spark -lc "spark-sql -e 'SELECT * FROM delta.`/workspace/delta/gold/c360`'"
      ```
 
-7. **Shutdown**
+8. **Shutdown**
 
    ```bash
    make down
    ```
 
    This stops all containers and removes volumes.
+
+8. **Optional: Run the console outside Docker**
+
+   ```bash
+   python3 -m venv .webapp-venv
+   source .webapp-venv/bin/activate
+   pip install -r webapp/requirements.txt
+   make webapp-local
+   ```
+
+   Use this mode only if you prefer a local Python process. The Dockerised console (started via `make up`) already provides the same features.
 
 ## Directory Structure
 
@@ -149,3 +168,9 @@ The following environment variables can override defaults when running scripts l
 - Seed scripts are idempotent; rerunning them simply re-emits the same deterministic records keyed by business IDs.
 - Delta checkpoints live under `/tmp/delta/*` to keep state separate from the repository.
 - No external cloud dependencies are required; everything runs locally via Docker and Spark.
+
+## Interactive Console Details
+
+- The console is a FastAPI app (`webapp/`) that surfaces Delta checkpoint readiness and an easy Avro publisher—ideal for narrating the streaming journey while the services run in the background.
+- The Publish Events panel ships with additive sample payloads. Feel free to tweak the JSON using natural field names (`email`, `lifecycle_stage`, etc.); the app maps the values to the registered Avro schemas automatically before hitting the REST Proxy.
+- Checkpoint cards track when the bronze/silver/gold Delta folders become available. Use the refresh button to update the indicators as your pipelines progress.

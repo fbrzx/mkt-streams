@@ -1,4 +1,4 @@
-.PHONY: up down schemas seed ksql spark
+.PHONY: up down schemas seed topics ksql spark webapp webapp-local
 
 up:
 	docker compose up -d
@@ -6,6 +6,9 @@ up:
 
 down:
 	docker compose down -v
+	rm -rf .checkpoints
+	rm -rf delta
+	rm -rf /tmp/delta
 
 schemas:
 	bash scripts/register_schemas.sh
@@ -15,8 +18,12 @@ seed:
 	bash scripts/seed_order.sh
 	bash scripts/seed_activation.sh
 
-ksql:
-	docker compose run --rm ksql-cli ksql http://ksqldb:8088 -f /scripts/streams.sql
+topics:
+	bash scripts/create_topics.sh
+
+ksql: topics
+	bash scripts/apply_ksql.sh
 
 spark:
 	docker compose up --build spark
+
