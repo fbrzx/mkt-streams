@@ -7,19 +7,35 @@ TOPIC=${CUSTOMER_TOPIC:-dom.customer.profile.upsert.v1}
 SUBJECT=${CUSTOMER_SUBJECT:-dom.customer.profile.upsert.v1-value}
 
 echo "Fetching schema id for $SUBJECT"
-schema_id=$(curl -s "$SCHEMA_REGISTRY_URL/subjects/$SUBJECT/versions/latest" | python3 - <<'PY'
-import json, sys
-payload = json.load(sys.stdin)
-print(payload['id'])
-PY
-)
+schema_tmp=$(mktemp)
+trap 'rm -f "$schema_tmp"' EXIT
+http_code=$(curl -s -o "$schema_tmp" -w "%{http_code}" \
+  "$SCHEMA_REGISTRY_URL/subjects/$SUBJECT/versions/latest") || http_code="000"
 
-if [[ -z "$schema_id" ]]; then
-  echo "Unable to resolve schema id for $SUBJECT" >&2
+if [[ "$http_code" != "200" ]]; then
+  echo "Unable to resolve schema id for $SUBJECT (HTTP $http_code)" >&2
+  if [[ -s "$schema_tmp" ]]; then
+    cat "$schema_tmp" >&2
+  fi
   exit 1
 fi
 
-read -r -d '' payload <<'JSON'
+schema_id=$(python3 - "$schema_tmp" <<'PY'
+import json, sys, pathlib
+path = pathlib.Path(sys.argv[1])
+with path.open() as f:
+    payload = json.load(f)
+schema_id = payload.get('id')
+if not schema_id:
+    raise SystemExit("Schema id missing from response")
+print(schema_id)
+PY
+)
+
+rm -f "$schema_tmp"
+trap - EXIT
+
+read -r -d '' payload <<'JSON' || true
 {
   "key_schema": "\"string\"",
   "value_schema_id": SCHEMA_ID,
@@ -28,11 +44,11 @@ read -r -d '' payload <<'JSON'
       "key": "CUST-1000",
       "value": {
         "customer_id": "CUST-1000",
-        "email": "ada@example.com",
-        "first_name": "Ada",
-        "last_name": "Lovelace",
+        "email": {"string": "ada@example.com"},
+        "first_name": {"string": "Ada"},
+        "last_name": {"string": "Lovelace"},
         "created_at": 1704067200000,
-        "lifecycle_stage": "prospect",
+        "lifecycle_stage": {"string": "prospect"},
         "is_active": true
       }
     },
@@ -40,11 +56,11 @@ read -r -d '' payload <<'JSON'
       "key": "CUST-1001",
       "value": {
         "customer_id": "CUST-1001",
-        "email": "grace@example.com",
-        "first_name": "Grace",
-        "last_name": "Hopper",
+        "email": {"string": "grace@example.com"},
+        "first_name": {"string": "Grace"},
+        "last_name": {"string": "Hopper"},
         "created_at": 1704153600000,
-        "lifecycle_stage": "customer",
+        "lifecycle_stage": {"string": "customer"},
         "is_active": true
       }
     },
@@ -52,11 +68,11 @@ read -r -d '' payload <<'JSON'
       "key": "CUST-1002",
       "value": {
         "customer_id": "CUST-1002",
-        "email": "katherine@example.com",
-        "first_name": "Katherine",
-        "last_name": "Johnson",
+        "email": {"string": "katherine@example.com"},
+        "first_name": {"string": "Katherine"},
+        "last_name": {"string": "Johnson"},
         "created_at": 1704240000000,
-        "lifecycle_stage": "prospect",
+        "lifecycle_stage": {"string": "prospect"},
         "is_active": false
       }
     }

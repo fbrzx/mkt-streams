@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 import os
 
+from delta import configure_spark_with_delta_pip
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-from common import checkpoint_path, gold_path, silver_path
+from common import checkpoint_path, gold_path, silver_path, wait_for_delta
 
 
 def build_spark_session() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder.appName("GoldC360")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        .getOrCreate()
     )
+    return configure_spark_with_delta_pip(builder).getOrCreate()
 
 
 def upsert(df, target_path: str, key_columns):
@@ -86,6 +87,10 @@ def process_batch(orders_batch, batch_id: int, target_path: str):
 def main():
     spark = build_spark_session()
     spark.sparkContext.setLogLevel("WARN")
+
+    wait_for_delta(silver_path("orders"))
+    wait_for_delta(silver_path("customers"))
+    wait_for_delta(silver_path("activations"))
 
     orders_stream = spark.readStream.format("delta").load(silver_path("orders"))
 

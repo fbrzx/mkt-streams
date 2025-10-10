@@ -8,7 +8,7 @@
     {"name": "email", "type": ["null", "string"], "default": null},
     {"name": "first_name", "type": ["null", "string"], "default": null},
     {"name": "last_name", "type": ["null", "string"], "default": null},
-    {"name": "created_at", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "created_at", "type": "long"},
     {"name": "lifecycle_stage", "type": ["null", "string"], "default": null},
     {"name": "is_active", "type": "boolean", "default": true}
   ]

@@ -4,6 +4,7 @@ import json
 import os
 from typing import Dict
 
+from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -23,16 +24,26 @@ from common import (
     kafka_bootstrap_servers,
     load_avro_schema,
     topic_config,
+    wait_for_delta,
+    wait_for_topic,
 )
 
 
 def build_spark_session() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder.appName("BronzeIngest")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        .getOrCreate()
     )
+
+    builder = configure_spark_with_delta_pip(builder)
+
+    existing_packages = builder._options.get("spark.jars.packages")
+    extras = ["org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"]
+    packages = ",".join(filter(None, [existing_packages, *extras]))
+    builder = builder.config("spark.jars.packages", packages)
+
+    return builder.getOrCreate()
 
 
 def avro_struct(schema: Dict) -> StructType:
@@ -87,6 +98,8 @@ def start_stream(spark: SparkSession, topic: str, schema_name: str, output_dir: 
     decode = decode_with_fastavro(schema_dict)
 
     spark.udf.register(f"decode_{schema_name}", decode, StringType())
+
+    wait_for_topic(topic)
 
     kafka_df = (
         spark.readStream.format("kafka")

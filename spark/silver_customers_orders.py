@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 import os
 
+from delta import configure_spark_with_delta_pip
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-from common import bronze_path, checkpoint_path, silver_path
+from common import bronze_path, checkpoint_path, silver_path, wait_for_delta
 
 
 def build_spark_session() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder.appName("SilverCustomersOrders")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        .getOrCreate()
     )
+    return configure_spark_with_delta_pip(builder).getOrCreate()
 
 
 def upsert_batch(df, batch_id: int, target_path: str, key_columns):
@@ -36,6 +37,7 @@ def upsert_batch(df, batch_id: int, target_path: str, key_columns):
 
 
 def start_customer_stream(spark: SparkSession):
+    wait_for_delta(bronze_path("customer_profile"))
     source = spark.readStream.format("delta").load(bronze_path("customer_profile"))
     curated = (
         source.select(
@@ -62,6 +64,7 @@ def start_customer_stream(spark: SparkSession):
 
 
 def start_order_stream(spark: SparkSession):
+    wait_for_delta(bronze_path("order_placed"))
     source = spark.readStream.format("delta").load(bronze_path("order_placed"))
     curated = (
         source.select(
@@ -88,6 +91,7 @@ def start_order_stream(spark: SparkSession):
 
 
 def start_activation_stream(spark: SparkSession):
+    wait_for_delta(bronze_path("activation_status"))
     source = spark.readStream.format("delta").load(bronze_path("activation_status"))
     curated = (
         source.select(

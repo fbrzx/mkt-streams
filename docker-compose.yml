@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   redpanda:
     image: redpandadata/redpanda:v23.3.7
@@ -8,7 +7,6 @@ services:
       - start
       - --smp=1
       - --overprovisioned
-      - --nodename=redpanda
       - --reserve-memory=0M
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
       - --advertise-kafka-addr=PLAINTEXT://redpanda:9092,PLAINTEXT_HOST://localhost:29092
@@ -66,6 +64,8 @@ services:
       KSQL_KSQL_STREAMS_AUTO_OFFSET_RESET: earliest
       KSQL_KSQL_INTERNAL_TOPIC_REPLICAS: "1"
       KSQL_KSQL_STREAMS_REPLICATION_FACTOR: "1"
+      KSQL_JMX_OPTS: "-Dksql.jmx.skip=true"
+      JMX_PORT: ""
     ports:
       - "8088:8088"
 
@@ -76,6 +76,10 @@ services:
       - ksqldb
     tty: true
     stdin_open: true
+    command: ["sleep", "infinity"]
+    environment:
+      KSQL_JMX_OPTS: "-Dksql.jmx.skip=true"
+      JMX_PORT: ""
     volumes:
       - ./ksql:/scripts
 
@@ -92,6 +96,23 @@ services:
       KAFKA_CLUSTERS_0_KSQLDBSERVER: http://ksqldb:8088
     ports:
       - "8080:8080"
+
+  spark:
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+    container_name: spark-jobs
+    depends_on:
+      - redpanda
+      - schema-registry
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      SPARK_CHECKPOINT_ROOT: /workspace/.checkpoints
+    volumes:
+      - .:/workspace
+    tty: true
+    stdin_open: true
 
 volumes:
   redpanda-data:

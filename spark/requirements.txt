@@ -1,3 +1,4 @@
 pyspark==3.5.1
-delta-spark==2.4.0
+delta-spark==3.1.0
 fastavro==1.9.4
+kafka-python==2.0.2

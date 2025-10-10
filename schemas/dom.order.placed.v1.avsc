@@ -24,6 +24,6 @@
     },
     {"name": "currency", "type": "string", "default": "USD"},
     {"name": "channel", "type": ["null", "string"], "default": null},
-    {"name": "placed_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+    {"name": "placed_at", "type": "long"}
   ]
 }

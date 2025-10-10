@@ -19,4 +19,4 @@ ksql:
 	docker compose run --rm ksql-cli ksql http://ksqldb:8088 -f /scripts/streams.sql
 
 spark:
-	bash spark/run_all.sh
+	docker compose up --build spark
