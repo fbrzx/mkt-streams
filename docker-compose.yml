@@ -21,7 +21,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - redpanda-data:/var/lib/redpanda/data
+      - ~/.img-data/redpanda:/var/lib/redpanda/data
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.3
@@ -113,6 +113,3 @@ services:
       - .:/workspace
     tty: true
     stdin_open: true
-
-volumes:
-  redpanda-data:

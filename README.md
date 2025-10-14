@@ -48,7 +48,9 @@ PY
    make up
    ```
 
-   This launches Redpanda, Schema Registry, REST Proxy, ksqlDB, ksqlDB CLI container, Kafka UI, and the web demo console at [http://localhost:8000](http://localhost:8000). Use the console to monitor the Delta checkpoints and publish extra demo events while the services run.
+   This launches Redpanda, Schema Registry, REST Proxy, ksqlDB, ksqlDB CLI container, Kafka UI at [http://localhost:8080](http://localhost:8080). Use the console to monitor the Delta checkpoints and publish extra demo events while the services run.
+
+   Need to iterate on just the console UI? Rebuild it independently with `make webapp`.
 
 2. **Register Avro schemas**
 
@@ -123,6 +125,8 @@ PY
    python3 -m venv .webapp-venv
    source .webapp-venv/bin/activate
    pip install -r webapp/requirements.txt
+   export REST_PROXY_URL=http://localhost:8082
+   export SCHEMA_REGISTRY_URL=http://localhost:8081
    make webapp-local
    ```
 
