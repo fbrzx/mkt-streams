@@ -75,6 +75,10 @@ PY
    ```
 
    Customer profiles, order events, and activation statuses are produced via the REST Proxy using the registered Avro schemas.
+   Publish an extra random order at any time with:
+   ```bash
+   make seed-random
+   ```
 
 5. **Deploy the ksqlDB topology**
 
@@ -105,6 +109,21 @@ PY
 
    - Browse topics and schemas at [Kafka UI](http://localhost:8080/).
    - Inspect ksqlDB streams/tables at [ksqlDB REST API](http://localhost:8088/).
+   - Join customer profiles with their order metrics in the ksqlDB CLI (or UI):
+
+     ```sql
+     SELECT
+       s.customer_id,
+       p.first_name AS first_name,
+       p.last_name AS last_name,
+       s.order_count,
+       s.lifetime_value,
+       s.last_order_ts
+     FROM T_CUSTOMER_ORDER_SUMMARY s
+     LEFT JOIN T_CUSTOMER_PROFILE p
+       ON s.customer_id = p.customer_id
+     EMIT CHANGES LIMIT 5;
+     ```
    - Query Delta tables using the Spark container:
 
      ```bash

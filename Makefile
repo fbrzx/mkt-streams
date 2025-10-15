@@ -1,4 +1,4 @@
-.PHONY: up down schemas seed topics ksql spark webapp webapp-local
+.PHONY: up down schemas seed topics ksql spark webapp webapp-local seed-random-order
 
 up:
 	docker compose up -d
@@ -18,6 +18,9 @@ seed:
 	bash scripts/seed_order.sh
 	bash scripts/seed_activation.sh
 
+seed-random:
+	bash scripts/seed_random_order.sh
+
 topics:
 	bash scripts/create_topics.sh
 
@@ -26,4 +29,3 @@ ksql: topics
 
 spark:
 	docker compose up --build spark
-
