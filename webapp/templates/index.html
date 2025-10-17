@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Marketing Streams Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 2rem;
+      background-color: #f5f5f5;
+      color: #222;
+    }
+    header {
+      margin-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin: 0 0 0.5rem 0;
+    }
+    form {
+      margin-bottom: 1.5rem;
+    }
+    .inline-form {
+      display: inline;
+      margin: 0;
+    }
+    .inline-form button {
+      padding: 0.3rem 0.8rem;
+      font-size: 0.85rem;
+    }
+    button {
+      background-color: #0b7285;
+      border: none;
+      color: #fff;
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0c8599;
+    }
+    .card {
+      background-color: #fff;
+      border-radius: 6px;
+      padding: 1rem 1.2rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+    .alert {
+      border-left: 4px solid;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .alert.success {
+      border-color: #2f9e44;
+      background-color: #ebfbee;
+    }
+    .alert.error {
+      border-color: #c92a2a;
+      background-color: #fff5f5;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background-color: #fff;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+    th, td {
+      padding: 0.75rem 0.9rem;
+      border-bottom: 1px solid #e1e1e1;
+      text-align: left;
+    }
+    th {
+      background-color: #0c8599;
+      color: #fff;
+      position: sticky;
+      top: 0;
+    }
+    tbody tr:nth-child(even) {
+      background-color: #f8f9fa;
+    }
+    details {
+      margin-top: 0.5rem;
+    }
+    code {
+      background-color: #f1f3f5;
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Marketing Streams Demo</h1>
+    <p>Trigger a new synthetic order and inspect the consolidated customer view produced by ksqlDB.</p>
+  </header>
+
+  <div class="card">
+    <form method="post">
+      <input type="hidden" name="action" value="order_new">
+      <button type="submit">Create New Customer &amp; Order</button>
+    </form>
+  </div>
+
+  {% if success_messages %}
+    {% for message in success_messages %}
+      <div class="alert success">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if error_messages %}
+    {% for message in error_messages %}
+      <div class="alert error">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if data_error %}
+    <div class="alert error">
+      {{ data_error }}
+    </div>
+  {% else %}
+    <div class="card">
+      <h2>Consolidated Customers (limit {{ result_limit }})</h2>
+      {% if customers %}
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Customer ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Lifecycle Stage</th>
+                <th>Status</th>
+                <th>Orders</th>
+                <th>Lifetime Value</th>
+                <th>Last Order</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in customers %}
+                <tr>
+                  <td>{{ row.customer_id }}</td>
+                  <td>{{ row.first_name }} {{ row.last_name }}</td>
+                  <td>{{ row.email or "—" }}</td>
+                  <td>{{ row.lifecycle_stage or "—" }}</td>
+                  <td>
+                    {% if row.is_active is none %}
+                      —
+                    {% elif row.is_active %}
+                      Active
+                    {% else %}
+                      Inactive
+                    {% endif %}
+                  </td>
+                  <td>{{ row.order_count or 0 }}</td>
+                  <td>{{ "%.2f"|format(row.lifetime_value) if row.lifetime_value is not none else "—" }}</td>
+                  <td>
+                    {% if row.last_order_at %}
+                      <div>{{ row.last_order_at }}</div>
+                      <div><code>{{ row.last_order_ts }}</code></div>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    <form method="post" class="inline-form">
+                      <input type="hidden" name="action" value="order_existing">
+                      <input type="hidden" name="customer_id" value="{{ row.customer_id }}">
+                      <button type="submit">Add Order</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p>No consolidated customers found yet. Use the button above to create the first profile.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+  <div><a href="/">Refresh</a></div>
+</body>
+</html>

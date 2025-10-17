@@ -1,6 +1,6 @@
 # Marketing Engine Demo
 
-This repository provisions a local, end-to-end marketing streaming stack on top of Redpanda, Confluent Schema Registry + REST Proxy, ksqlDB, Kafka UI, and local Spark Structured Streaming pipelines that materialize bronze/silver/gold Delta tables and publish a propensity score topic.
+Local sandbox to showcase a marketing event pipeline: REST-based seed scripts publish Avro payloads to Redpanda, ksqlDB enriches the streams, and Spark Structured Streaming materialises Delta Lake gold tables plus a propensity-scoring topic.
 
 ## Architecture Overview
 
@@ -25,175 +25,13 @@ flowchart LR
     SparkSQL[Spark SQL Shell] --> Delta
 ```
 
-## Prerequisites
+- Seed scripts hit the REST Proxy using Schema Registry for Avro payloads.
+- ksqlDB builds the customer profile cache, order summary tables, and downstream segment topics.
+- Spark jobs ingest the Kafka topics into Delta bronze/silver/gold layers and emit propensity scores.
+- Kafka UI and Spark SQL offer visibility into the live event streams and Delta snapshots.
 
-- Docker & Docker Compose plugin
-- Optional: Python 3.11.9 if you prefer to run the Spark jobs on your host instead of the provided container. When building Python yourself (e.g., via pyenv) ensure `_lzma` support is enabled:
-  ```bash
-  brew install xz
-  env LDFLAGS="-L/opt/homebrew/opt/xz/lib" \
-      CPPFLAGS="-I/opt/homebrew/opt/xz/include" \
-      PKG_CONFIG_PATH="/opt/homebrew/opt/xz/lib/pkgconfig" \
-      pyenv install 3.11.9
-  python3.11 - <<'PY'
-import lzma
-PY
-  ```
+## Demo walkthrough
 
-## Quickstart
+All setup commands, step-by-step narratives, and SQL snippets now live in [`DEMO.md`](DEMO.md). Use that guide to spin up the stack (`make up`), explore the helper UI on port 5000, seed example data, and run the consolidated ksqlDB query that surfaces customer names and order metrics.
 
-1. **Start the platform services**
-
-   ```bash
-   make up
-   ```
-
-   This launches Redpanda, Schema Registry, REST Proxy, ksqlDB, ksqlDB CLI container, Kafka UI at [http://localhost:8080](http://localhost:8080). Use the console to monitor the Delta checkpoints and publish extra demo events while the services run.
-
-   Need to iterate on just the console UI? Rebuild it independently with `make webapp`.
-
-2. **Register Avro schemas**
-
-   ```bash
-   make schemas
-   ```
-
-   The script posts each `.avsc` under `schemas/` to the Schema Registry. It is safe to rerun at any time.
-
-3. **Ensure Kafka topics exist**
-
-   ```bash
-   make topics
-   ```
-
-   This pre-creates every topic used by the topology so you can stand up ksqlDB before any data is produced.
-
-4. **Seed demo data** *(optional — run later if you want the topology without data)*
-
-   ```bash
-   make seed
-   ```
-
-   Customer profiles, order events, and activation statuses are produced via the REST Proxy using the registered Avro schemas.
-   Publish an extra random order at any time with:
-   ```bash
-   make seed-random
-   ```
-
-5. **Deploy the ksqlDB topology**
-
-   ```bash
-   make ksql
-   ```
-
-   The helper waits for ksqlDB to be ready and then pipes `ksql/streams.sql` into the server, creating the base streams, tables, and segment materialization stream.
-
-6. **Run the Spark streaming jobs (containerized)**
-
-   ```bash
-   make spark
-   ```
-
-   The first run builds a lightweight image (Python 3.11.9 + Temurin JRE 17 + project requirements) and starts the service defined in `docker-compose.yml`. Logs stream in the foreground; press `Ctrl+C` to stop the jobs.
-
-   This launches the four pipelines found in `spark/`:
-
-   - `ingest_stream.py`: consumes Kafka topics and writes Delta bronze tables.
-   - `silver_customers_orders.py`: builds curated silver tables with Delta MERGEs.
-   - `gold_c360.py`: aggregates a customer 360º gold view.
-   - `score_and_publish.py`: computes propensity scores from gold and publishes `dom.propensity.score.v1` to Kafka.
-
-   Each stream maintains checkpoints beneath `/tmp/delta/` and writes Delta tables under `./delta/`.
-
-7. **Explore the data**
-
-   - Browse topics and schemas at [Kafka UI](http://localhost:8080/).
-   - Inspect ksqlDB streams/tables at [ksqlDB REST API](http://localhost:8088/).
-   - Join customer profiles with their order metrics in the ksqlDB CLI (or UI):
-
-     ```sql
-     SELECT
-       s.customer_id,
-       p.first_name AS first_name,
-       p.last_name AS last_name,
-       s.order_count,
-       s.lifetime_value,
-       s.last_order_ts
-     FROM T_CUSTOMER_ORDER_SUMMARY s
-     LEFT JOIN T_CUSTOMER_PROFILE p
-       ON s.customer_id = p.customer_id
-     EMIT CHANGES LIMIT 5;
-     ```
-   - Query Delta tables using the Spark container:
-
-     ```bash
-     docker compose run --rm --entrypoint bash spark -lc "spark-sql -e 'SELECT * FROM delta.`/workspace/delta/gold/c360`'"
-     ```
-
-8. **Shutdown**
-
-   ```bash
-   make down
-   ```
-
-   This stops all containers and removes volumes.
-
-8. **Optional: Run the console outside Docker**
-
-   ```bash
-   python3 -m venv .webapp-venv
-   source .webapp-venv/bin/activate
-   pip install -r webapp/requirements.txt
-   export REST_PROXY_URL=http://localhost:8082
-   export SCHEMA_REGISTRY_URL=http://localhost:8081
-   make webapp-local
-   ```
-
-   Use this mode only if you prefer a local Python process. The Dockerised console (started via `make up`) already provides the same features.
-
-## Directory Structure
-
-- `docker-compose.yml` – Service topology for the marketing engine stack.
-- `schemas/` – Avro schema definitions for customer, order, activation, and segment topics.
-- `scripts/` – Bash helpers for schema registration and data seeding via REST Proxy.
-- `ksql/streams.sql` – ksqlDB statements for ingest, enrichment, and segment materialization.
-- `spark/` – Structured Streaming jobs, requirements, and orchestration script.
-- `delta/` – Local Delta Lake storage (created at runtime).
-- `.checkpoints/` – Streaming checkpoints (created when the Spark container runs).
-
-## Optional: Run Spark jobs on the host
-
-If you prefer to execute the Spark pipelines outside of Docker, prepare a matching environment:
-
-```bash
-python3.11.9 -m venv .venv
-source .venv/bin/activate
-pip install -r spark/requirements.txt
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-export SPARK_CHECKPOINT_ROOT=$(pwd)/.checkpoints
-bash spark/run_all.sh
-```
-
-Make sure `java` is available and the `lzma` module loads (`python -c "import lzma"`).
-
-## Environment Variables
-
-The following environment variables can override defaults when running scripts locally:
-
-- `SCHEMA_REGISTRY_URL` – Base URL for Schema Registry (default `http://localhost:8081`).
-- `REST_PROXY_URL` – Base URL for Kafka REST Proxy (default `http://localhost:8082`).
-- `KAFKA_BOOTSTRAP_SERVERS` – Kafka bootstrap servers for Spark (default `localhost:9092`).
-- `CUSTOMER_TOPIC`, `ORDER_TOPIC`, `ACTIVATION_TOPIC`, `PROPENSITY_TOPIC` – Topic overrides for ingestion and publishing.
-- `SPARK_CHECKPOINT_ROOT` – Root directory for Spark checkpoints (default `/tmp/delta/checkpoints`).
-
-## Notes
-
-- Seed scripts are idempotent; rerunning them simply re-emits the same deterministic records keyed by business IDs.
-- Delta checkpoints live under `/tmp/delta/*` to keep state separate from the repository.
-- No external cloud dependencies are required; everything runs locally via Docker and Spark.
-
-## Interactive Console Details
-
-- The console is a FastAPI app (`webapp/`) that surfaces Delta checkpoint readiness and an easy Avro publisher—ideal for narrating the streaming journey while the services run in the background.
-- The Publish Events panel ships with additive sample payloads. Feel free to tweak the JSON using natural field names (`email`, `lifecycle_stage`, etc.); the app maps the values to the registered Avro schemas automatically before hitting the REST Proxy.
-- Checkpoint cards track when the bronze/silver/gold Delta folders become available. Use the refresh button to update the indicators as your pipelines progress.
+The web UI keeps a Redis-backed cache of the consolidated customer view so refreshes stay instant. Point `REDIS_URL` at your shared Redis instance (default: `redis://host.docker.internal:6379/0` when running via Docker).

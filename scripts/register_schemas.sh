@@ -9,6 +9,22 @@ if [[ ! -d "$SCHEMA_DIR" ]]; then
   exit 1
 fi
 
+wait_for_schema_registry() {
+  local retries=40
+  local delay=3
+  echo "Waiting for Schema Registry at ${SCHEMA_REGISTRY_URL}..."
+  for attempt in $(seq 1 "$retries"); do
+    if curl -sSf "${SCHEMA_REGISTRY_URL}/subjects" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+  echo "Schema Registry not reachable after $((retries * delay)) seconds." >&2
+  return 1
+}
+
+wait_for_schema_registry
+
 for schema_file in "$SCHEMA_DIR"/*.avsc; do
   [[ -e "$schema_file" ]] || continue
   subject="$(basename "${schema_file%.avsc}")-value"

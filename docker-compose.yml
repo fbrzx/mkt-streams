@@ -35,6 +35,11 @@ services:
       SCHEMA_REGISTRY_DEBUG: "true"
     ports:
       - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/subjects || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   rest-proxy:
     image: confluentinc/cp-kafka-rest:7.5.3
@@ -54,8 +59,10 @@ services:
     image: confluentinc/ksqldb-server:0.29.0
     container_name: ksqldb
     depends_on:
-      - redpanda
-      - schema-registry
+      redpanda:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
     environment:
       KSQL_LISTENERS: http://0.0.0.0:8088
       KSQL_BOOTSTRAP_SERVERS: redpanda:9092
@@ -68,6 +75,7 @@ services:
       JMX_PORT: ""
     ports:
       - "8088:8088"
+    restart: unless-stopped
 
   ksql-cli:
     image: confluentinc/ksqldb-cli:0.29.0
@@ -113,3 +121,26 @@ services:
       - .:/workspace
     tty: true
     stdin_open: true
+
+  webapp:
+    build:
+      context: .
+      dockerfile: webapp/Dockerfile
+    container_name: marketing-webapp
+    depends_on:
+      - schema-registry
+      - rest-proxy
+      - ksqldb
+    working_dir: /workspace
+    environment:
+      KSQLDB_URL: http://ksqldb:8088
+      REST_PROXY_URL: http://rest-proxy:8082
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CUSTOMER_RESULT_LIMIT: 100
+      REDIS_URL: ${REDIS_URL:-redis://host.docker.internal:6379/0}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      CONSOLIDATED_TOPIC: dom.customer.consolidated.v1
+    volumes:
+      - .:/workspace
+    ports:
+      - "5000:5000"
