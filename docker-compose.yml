@@ -122,6 +122,19 @@ services:
     tty: true
     stdin_open: true
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   webapp:
     build:
       context: .
@@ -131,16 +144,20 @@ services:
       - schema-registry
       - rest-proxy
       - ksqldb
+      - redis
     working_dir: /workspace
     environment:
       KSQLDB_URL: http://ksqldb:8088
       REST_PROXY_URL: http://rest-proxy:8082
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CUSTOMER_RESULT_LIMIT: 100
-      REDIS_URL: ${REDIS_URL:-redis://host.docker.internal:6379/0}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       CONSOLIDATED_TOPIC: dom.customer.consolidated.v1
     volumes:
       - .:/workspace
     ports:
-      - "5000:5000"
+      - "5001:5000"
+
+volumes:
+  redis-data:
