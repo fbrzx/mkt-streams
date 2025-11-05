@@ -14,7 +14,7 @@ This project simulates a marketing platform where you can:
 
 ```mermaid
 flowchart LR
-    WebUI[Web App<br/>localhost:5000] --> REST[Kafka REST Proxy]
+    WebUI[Web App<br/>localhost:5001] --> REST[Kafka REST Proxy]
     REST --> RP[(Redpanda/Kafka)]
     REST -. schema validation .-> Schema[Schema Registry]
     RP --> KSQL[ksqlDB<br/>Real-time Aggregation]
@@ -48,7 +48,7 @@ flowchart LR
 make up
 
 # Open the web app
-open http://localhost:5000
+open http://localhost:5001
 ```
 
 The web app provides three actions:
