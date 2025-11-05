@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 import requests
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from redis import Redis
@@ -18,18 +18,21 @@ from redis.exceptions import RedisError
 
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change-me")
 
 DEFAULT_KSQLDB_URL = "http://localhost:8088"
 DEFAULT_SCHEMA_REGISTRY_URL = "http://localhost:8081"
 DEFAULT_REST_PROXY_URL = "http://localhost:8082"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 DEFAULT_KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-DEFAULT_CONSOLIDATED_TOPIC = "dom.customer.consolidated.v1"
+DEFAULT_CONSOLIDATED_TOPIC = "dom.customer.gold.v1"  # Gold layer from Spark
 
 ORDER_TOPIC = os.environ.get("ORDER_TOPIC", "dom.order.placed.v1")
 ORDER_SUBJECT = os.environ.get("ORDER_SUBJECT", f"{ORDER_TOPIC}-value")
 CUSTOMER_TOPIC = os.environ.get("CUSTOMER_TOPIC", "dom.customer.profile.upsert.v1")
 CUSTOMER_SUBJECT = os.environ.get("CUSTOMER_SUBJECT", f"{CUSTOMER_TOPIC}-value")
+ACTIVATION_TOPIC = os.environ.get("ACTIVATION_TOPIC", "dom.activation.delivery.status.v1")
+ACTIVATION_SUBJECT = os.environ.get("ACTIVATION_SUBJECT", f"{ACTIVATION_TOPIC}-value")
 
 RESULT_LIMIT = int(os.environ.get("CUSTOMER_RESULT_LIMIT", "250"))
 
@@ -46,6 +49,8 @@ CONSOLIDATED_COLUMNS = (
     "email",
     "lifecycle_stage",
     "is_active",
+    "delivered_messages",
+    "failed_messages",
 )
 
 AVRO_HEADERS = {"Content-Type": "application/vnd.kafka.avro.v2+json"}
@@ -112,6 +117,28 @@ class CustomerProfile:
             "created_at": self.created_at,
             "lifecycle_stage": nullable_string(self.lifecycle_stage),
             "is_active": self.is_active,
+        }
+
+
+@dataclass
+class ActivationDeliveryStatus:
+    activation_id: str
+    order_id: str
+    customer_id: str
+    channel: str
+    status: str
+    delivered_at: Optional[int]
+    attempts: int
+
+    def value(self) -> Dict[str, object]:
+        return {
+            "activation_id": self.activation_id,
+            "order_id": self.order_id,
+            "customer_id": self.customer_id,
+            "channel": self.channel,
+            "status": self.status,
+            "delivered_at": {"long": self.delivered_at} if self.delivered_at is not None else None,
+            "attempts": self.attempts,
         }
 
 
@@ -230,6 +257,19 @@ def normalise_row(raw: Dict, fallback_id: Optional[str] = None) -> Dict:
     else:
         row["is_active"] = bool(is_active)
 
+    # Normalize engagement message counts
+    delivered_messages = row.get("delivered_messages")
+    try:
+        row["delivered_messages"] = int(delivered_messages) if delivered_messages is not None else 0
+    except (TypeError, ValueError):
+        row["delivered_messages"] = 0
+
+    failed_messages = row.get("failed_messages")
+    try:
+        row["failed_messages"] = int(failed_messages) if failed_messages is not None else 0
+    except (TypeError, ValueError):
+        row["failed_messages"] = 0
+
     return row
 
 
@@ -310,10 +350,33 @@ def upsert_cached_customer(row: Dict) -> None:
         profile_snapshot = wait_for_customer_profile(customer_id, attempts=3, delay=0.3)
         if profile_snapshot:
             incoming.update({k: v for k, v in profile_snapshot.items() if v is not None})
-    merged: Dict[str, object] = dict(current) if current else {}
+    merged: Dict[str, object] = normalise_row(current, customer_id) if current else {}
+
+    def prefer_numeric_max(key: str, new_value, existing_value) -> bool:
+        if new_value is None:
+            return False
+        if existing_value is None:
+            return True
+        try:
+            if key == "lifetime_value":
+                return float(new_value) >= float(existing_value)
+            if key in {"order_count", "delivered_messages", "failed_messages"}:
+                return int(new_value) >= int(existing_value)
+            if key in {"last_order_ts", "last_engagement_ts"}:
+                return int(new_value) >= int(existing_value)
+        except (TypeError, ValueError):
+            return True
+        return True
+
     for key, value in incoming.items():
+        if key in {"order_count", "lifetime_value", "delivered_messages", "failed_messages", "last_order_ts", "last_engagement_ts"}:
+            current_value = merged.get(key)
+            if prefer_numeric_max(key, value, current_value):
+                merged[key] = value
+            continue
         if value is not None or key not in merged:
             merged[key] = value
+
     cache_row(merged)
 
 
@@ -346,7 +409,7 @@ def load_cached_rows(limit: int) -> List[Dict]:
             row = load_cached_customer(customer_id)
             if row:
                 rows.append(enrich_row_with_profile(row, attempts=2, delay=0.2))
-        rows.sort(key=lambda record: record.get("last_order_ts") or 0, reverse=True)
+        rows.sort(key=lambda record: str(record.get("customer_id") or ""))
         return rows
     except RedisError as exc:
         logger.warning("Unable to read cached rows: %s", exc)
@@ -375,8 +438,8 @@ def start_cache_sync_thread() -> None:
                 consumer = KafkaConsumer(
                     CONSOLIDATED_TOPIC,
                     bootstrap_servers=bootstrap,
-                    auto_offset_reset="earliest",
-                    enable_auto_commit=False,
+                    auto_offset_reset="earliest",  # Only for first-time consumers
+                    enable_auto_commit=True,       # Enable auto-commit to track progress
                     group_id="webapp-cache-sync",
                     value_deserializer=lambda m: json.loads(m.decode("utf-8")) if m else None,
                     key_deserializer=lambda m: m.decode("utf-8") if m else None,
@@ -384,9 +447,8 @@ def start_cache_sync_thread() -> None:
                 )
                 consumer.poll(timeout_ms=0)
                 assignment = consumer.assignment()
-                if assignment:
-                    for tp in assignment:
-                        consumer.seek_to_beginning(tp)
+                # Don't seek to beginning - respect committed offsets
+                # Only on first run will it start from earliest
                 backoff = 2
                 logger.info("Cache sync consuming %s via %s", CONSOLIDATED_TOPIC, bootstrap)
 
@@ -631,7 +693,6 @@ def build_random_customer() -> CustomerProfile:
     first_names = ["Jordan", "Quinn", "Harper", "Avery", "Rowan", "Kai", "Emerson", "Milan"]
     last_names = ["Rivera", "Kim", "Singh", "Nakamura", "Diaz", "Clark", "Nguyen", "Patel"]
     email_domains = ["example.com", "shop.example.com", "mail.example.com"]
-    lifecycle_stages = ["prospect", "customer", "evangelist", "churn-risk"]
 
     first_name = _rng.choice(first_names)
     last_name = _rng.choice(last_names)
@@ -643,8 +704,8 @@ def build_random_customer() -> CustomerProfile:
         email=email,
         first_name=first_name,
         last_name=last_name,
-        lifecycle_stage=_rng.choice(lifecycle_stages),
-        is_active=_rng.random() < 0.92,
+        lifecycle_stage="prospect",
+        is_active=False,
         created_at=created_at,
     )
 
@@ -677,30 +738,161 @@ def publish_order(order: OrderEvent) -> None:
     post_avro(ORDER_TOPIC, payload)
 
 
+def calculate_lifecycle_stage(order_count: int, lifetime_value: float, delivered_messages: int = 0, failed_messages: int = 0) -> str:
+    """
+    Calculate lifecycle stage based on customer metrics.
+
+    Rules:
+    - prospect: No orders yet (0 orders)
+    - customer: 1+ orders
+    - engaged: 1+ orders AND engagement rate > 50%
+    - high-value: LTV > $5000 AND engagement rate < 70%
+    - evangelist: LTV > $5000 AND engagement rate >= 70%
+    """
+    if order_count == 0:
+        return "prospect"
+
+    # Calculate engagement success rate
+    total_engagements = delivered_messages + failed_messages
+    engagement_rate = delivered_messages / total_engagements if total_engagements > 0 else 0
+
+    # Check evangelist first (highest tier)
+    if lifetime_value > 5000 and engagement_rate >= 0.7:
+        return "evangelist"
+
+    # Check high-value
+    if lifetime_value > 5000 and engagement_rate < 0.7:
+        return "high-value"
+
+    # Check engaged
+    if order_count >= 1 and engagement_rate > 0.5:
+        return "engaged"
+
+    # Default to customer if they have orders
+    return "customer"
+
+
 def create_random_order_for_customer(customer_id: str) -> OrderEvent:
     order = build_random_order(customer_id)
     publish_order(order)
     base_row = load_cached_customer(customer_id) or {"customer_id": customer_id}
-    base_row["order_count"] = base_row.get("order_count", 0) + 1
-    base_row["lifetime_value"] = round(base_row.get("lifetime_value", 0.0) + order.order_total, 2)
+    new_order_count = base_row.get("order_count", 0) + 1
+    new_lifetime_value = round(base_row.get("lifetime_value", 0.0) + order.order_total, 2)
+    delivered_messages = base_row.get("delivered_messages", 0)
+    failed_messages = base_row.get("failed_messages", 0)
+    new_lifecycle_stage = calculate_lifecycle_stage(new_order_count, new_lifetime_value, delivered_messages, failed_messages)
+
+    base_row["order_count"] = new_order_count
+    base_row["lifetime_value"] = new_lifetime_value
     base_row["last_order_ts"] = order.placed_at
+    # Set customer as active when they have orders
+    base_row["is_active"] = True
+    # Update lifecycle stage based on new metrics
+    old_lifecycle_stage = base_row.get("lifecycle_stage", "prospect")
+    base_row["lifecycle_stage"] = new_lifecycle_stage
+
     if not (base_row.get("first_name") or base_row.get("email")):
         profile_snapshot = wait_for_customer_profile(customer_id)
         if profile_snapshot:
             for key, value in profile_snapshot.items():
                 if value is not None:
                     base_row[key] = value
+
+    # If lifecycle stage changed, publish updated customer profile to Kafka
+    if old_lifecycle_stage != new_lifecycle_stage:
+        updated_profile = CustomerProfile(
+            customer_id=customer_id,
+            email=base_row.get("email", ""),
+            first_name=base_row.get("first_name", ""),
+            last_name=base_row.get("last_name", ""),
+            lifecycle_stage=new_lifecycle_stage,
+            is_active=True,
+            created_at=int(time.time() * 1000),
+        )
+        publish_customer_profile(updated_profile)
+
     upsert_cached_customer(base_row)
     prime_customer_snapshot(customer_id)
     return order
 
 
-def create_customer_with_order() -> Tuple[CustomerProfile, OrderEvent]:
+def build_random_engagement(customer_id: str) -> ActivationDeliveryStatus:
+    """Build a random marketing engagement event."""
+    channels = ["email", "sms", "push", "in-app"]
+    # 75% success rate
+    status = "delivered" if _rng.random() < 0.75 else "failed"
+
+    activation_id = f"ACT-{_rng.randint(100000, 999999)}"
+    order_id = f"ENG-{_rng.randint(100000, 999999)}"
+    channel = _rng.choice(channels)
+    delivered_at = int(time.time() * 1000) if status == "delivered" else None
+    attempts = 1 if status == "delivered" else _rng.randint(1, 3)
+
+    return ActivationDeliveryStatus(
+        activation_id=activation_id,
+        order_id=order_id,
+        customer_id=customer_id,
+        channel=channel,
+        status=status,
+        delivered_at=delivered_at,
+        attempts=attempts,
+    )
+
+
+def publish_engagement(engagement: ActivationDeliveryStatus) -> None:
+    """Publish an engagement event to the activation topic."""
+    payload = {
+        "key_schema": "\"string\"",
+        "value_schema_id": get_schema_id(ACTIVATION_SUBJECT),
+        "records": [
+            {
+                "key": engagement.activation_id,
+                "value": engagement.value(),
+            }
+        ],
+    }
+    post_avro(ACTIVATION_TOPIC, payload)
+
+
+def create_engagement_for_customer(customer_id: str) -> ActivationDeliveryStatus:
+    """Create and publish a random marketing engagement for a customer."""
+    engagement = build_random_engagement(customer_id)
+    publish_engagement(engagement)
+    current = load_cached_customer(customer_id) or {"customer_id": customer_id}
+
+    delivered_messages = current.get("delivered_messages", 0) or 0
+    failed_messages = current.get("failed_messages", 0) or 0
+    if engagement.status == "delivered":
+        delivered_messages += 1
+    else:
+        failed_messages += 1
+
+    lifecycle_stage = calculate_lifecycle_stage(
+        current.get("order_count", 0) or 0,
+        current.get("lifetime_value", 0.0) or 0.0,
+        delivered_messages,
+        failed_messages,
+    )
+
+    upsert_cached_customer(
+        {
+            "customer_id": customer_id,
+            "delivered_messages": delivered_messages,
+            "failed_messages": failed_messages,
+            "lifecycle_stage": lifecycle_stage,
+            "last_engagement_ts": engagement.delivered_at,
+        }
+    )
+    prime_customer_snapshot(customer_id)
+
+    return engagement
+
+
+def create_customer() -> CustomerProfile:
+    """Create a new customer profile without any orders."""
     customer = build_random_customer()
-    order = build_random_order(customer.customer_id)
     publish_customer_profile(customer)
     profile_snapshot = wait_for_customer_profile(customer.customer_id)
-    publish_order(order)
     seed_row = {
         "customer_id": customer.customer_id,
         "first_name": customer.first_name,
@@ -708,15 +900,15 @@ def create_customer_with_order() -> Tuple[CustomerProfile, OrderEvent]:
         "email": customer.email,
         "lifecycle_stage": customer.lifecycle_stage,
         "is_active": customer.is_active,
-        "order_count": 1,
-        "lifetime_value": round(order.order_total, 2),
-        "last_order_ts": order.placed_at,
+        "order_count": 0,
+        "lifetime_value": 0.0,
+        "last_order_ts": None,
     }
     if profile_snapshot:
         seed_row.update({k: v for k, v in profile_snapshot.items() if v is not None})
     upsert_cached_customer(seed_row)
     prime_customer_snapshot(customer.customer_id)
-    return customer, order
+    return customer
 
 
 def fetch_consolidated_rows(wait_seconds: float = 3.0) -> List[Dict]:
@@ -725,6 +917,7 @@ def fetch_consolidated_rows(wait_seconds: float = 3.0) -> List[Dict]:
     while True:
         cached = load_cached_rows(RESULT_LIMIT)
         if cached:
+            cached.sort(key=lambda row: str(row.get("customer_id") or ""))
             return cached
         if time.time() >= deadline:
             break
@@ -738,56 +931,109 @@ def fetch_consolidated_rows(wait_seconds: float = 3.0) -> List[Dict]:
     return []
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
-    success_messages: List[str] = []
-    error_messages: List[str] = []
-
-    if request.method == "POST":
-        action = request.form.get("action", "")
-        if action == "order_existing":
-            customer_id = (request.form.get("customer_id") or "").strip()
-            if not customer_id:
-                error_messages.append("Missing customer id for existing order request.")
-            else:
-                try:
-                    order = create_random_order_for_customer(customer_id)
-                    success_messages.append(
-                        f"Published order {order.order_id} ({order.channel}, ${order.order_total:.2f}) "
-                        f"for customer {customer_id}."
-                    )
-                except EventPublishError as exc:
-                    error_messages.append(str(exc))
-        elif action == "order_new":
-            try:
-                customer, order = create_customer_with_order()
-                success_messages.append(
-                    f"Created customer {customer.customer_id} ({customer.first_name} {customer.last_name}) "
-                    f"and published order {order.order_id}."
-                )
-            except EventPublishError as exc:
-                error_messages.append(str(exc))
-        else:
-            error_messages.append("Unknown action requested.")
-
     data_error = None
     customers: List[Dict] = []
     try:
         customers = fetch_consolidated_rows()
+        customers.sort(key=lambda row: str(row.get("customer_id") or ""))
     except DataUnavailableError as exc:
         data_error = str(exc)
 
     return render_template(
         "index.html",
         customers=customers,
-        success_messages=success_messages,
-        error_messages=error_messages,
         data_error=data_error,
         result_limit=RESULT_LIMIT,
     )
 
 
-reset_cache()
+def _customer_snapshot(customer_id: str) -> Dict:
+    snapshot = load_cached_customer(customer_id)
+    if snapshot:
+        return snapshot
+    return {"customer_id": customer_id}
+
+
+@app.get("/api/customers")
+def api_customers():
+    try:
+        customers = fetch_consolidated_rows()
+        customers.sort(key=lambda row: str(row.get("customer_id") or ""))
+        return jsonify({"customers": customers})
+    except DataUnavailableError as exc:
+        return jsonify({"customers": [], "error": str(exc)}), 503
+
+
+@app.post("/api/customers")
+def api_create_customer():
+    try:
+        customer = create_customer()
+    except EventPublishError as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    snapshot = _customer_snapshot(customer.customer_id)
+    message = (
+        f"Created customer {customer.customer_id} ({customer.first_name} {customer.last_name}) "
+        f"with lifecycle_stage='{customer.lifecycle_stage}' and is_active={customer.is_active}."
+    )
+    return jsonify({"message": message, "customer": snapshot}), 201
+
+
+@app.post("/api/customers/<customer_id>/order")
+def api_create_order(customer_id: str):
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return jsonify({"error": "Missing customer id for order request."}), 400
+    try:
+        order = create_random_order_for_customer(customer_id)
+    except EventPublishError as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    snapshot = _customer_snapshot(customer_id)
+    order_summary = {
+        "order_id": order.order_id,
+        "channel": order.channel,
+        "order_total": order.order_total,
+    }
+    message = (
+        f"Published order {order.order_id} ({order.channel}, ${order.order_total:.2f}) "
+        f"for customer {customer_id}."
+    )
+    return jsonify({"message": message, "order": order_summary, "customer": snapshot})
+
+
+@app.post("/api/customers/<customer_id>/engage")
+def api_create_engagement(customer_id: str):
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return jsonify({"error": "Missing customer id for engagement request."}), 400
+    try:
+        engagement = create_engagement_for_customer(customer_id)
+    except EventPublishError as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    snapshot = _customer_snapshot(customer_id)
+    delivered = snapshot.get("delivered_messages") or 0
+    failed = snapshot.get("failed_messages") or 0
+    totals = ""
+    if delivered or failed:
+        totals = f" Totals: ✓ {delivered} / ✗ {failed}."
+    message = (
+        f"Published activation {engagement.activation_id} ({engagement.channel}, {engagement.status}) "
+        f"for customer {customer_id}.{totals}"
+    )
+    engagement_summary = {
+        "activation_id": engagement.activation_id,
+        "channel": engagement.channel,
+        "status": engagement.status,
+    }
+    return jsonify({"message": message, "engagement": engagement_summary, "customer": snapshot})
+
+
+if os.environ.get("RESET_CACHE_ON_START", "0") == "1":
+    reset_cache()
 start_cache_sync_thread()
 
 

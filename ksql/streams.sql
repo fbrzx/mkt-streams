@@ -91,6 +91,16 @@ CREATE TABLE T_CUSTOMER_ORDER_SUMMARY AS
   GROUP BY customer_id
   EMIT CHANGES;
 
+CREATE TABLE T_ACTIVATION_SUMMARY AS
+  SELECT
+    customer_id,
+    COUNT(CASE WHEN status = 'delivered' THEN 1 ELSE NULL END) AS delivered_messages,
+    COUNT(CASE WHEN status != 'delivered' THEN 1 ELSE NULL END) AS failed_messages,
+    MAX(delivered_at) AS last_engagement_ts
+  FROM S_ACTIVATION_STATUS
+  GROUP BY customer_id
+  EMIT CHANGES;
+
 CREATE TABLE T_CUSTOMER_CONSOLIDATED WITH (
   KAFKA_TOPIC='dom.customer.consolidated.v1',
   VALUE_FORMAT='JSON',
@@ -105,10 +115,15 @@ CREATE TABLE T_CUSTOMER_CONSOLIDATED WITH (
     p.last_name AS last_name,
     p.email AS email,
     p.lifecycle_stage AS lifecycle_stage,
-    p.is_active AS is_active
+    p.is_active AS is_active,
+    COALESCE(a.delivered_messages, CAST(0 AS BIGINT)) AS delivered_messages,
+    COALESCE(a.failed_messages, CAST(0 AS BIGINT)) AS failed_messages,
+    a.last_engagement_ts AS last_engagement_ts
   FROM T_CUSTOMER_ORDER_SUMMARY s
   LEFT JOIN T_CUSTOMER_PROFILE p
     ON s.customer_id = p.customer_id
+  LEFT JOIN T_ACTIVATION_SUMMARY a
+    ON s.customer_id = a.customer_id
   EMIT CHANGES;
 
 CREATE TABLE T_SEGMENT_SOURCE WITH (

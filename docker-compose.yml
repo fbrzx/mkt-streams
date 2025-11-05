@@ -21,7 +21,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - ~/.img-data/redpanda:/var/lib/redpanda/data
+      - redpanda-data:/var/lib/redpanda/data
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.3
@@ -153,11 +153,23 @@ services:
       CUSTOMER_RESULT_LIMIT: 100
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-      CONSOLIDATED_TOPIC: dom.customer.consolidated.v1
+      CONSOLIDATED_TOPIC: dom.customer.gold.v1
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-secret-key}
     volumes:
       - .:/workspace
     ports:
       - "5001:5000"
 
 volumes:
+  redpanda-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redpanda
   redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis

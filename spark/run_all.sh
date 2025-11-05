@@ -38,20 +38,53 @@ PY
 echo "Priming Spark dependencies..."
 "$PYTHON_BIN" -m spark.bootstrap_env
 
-SCRIPTS=(
+# Start base layer jobs (bronze and silver)
+BASE_SCRIPTS=(
   ingest_stream.py
   silver_customers_orders.py
+)
+
+# Start gold layer job (depends on silver)
+GOLD_SCRIPTS=(
   gold_c360.py
+)
+
+# Start publishing jobs (depend on gold)
+PUBLISH_SCRIPTS=(
+  publish_c360.py
   score_and_publish.py
 )
 
 pids=()
 
-for script in "${SCRIPTS[@]}"; do
+echo "=== Starting base layer jobs (bronze, silver) ==="
+for script in "${BASE_SCRIPTS[@]}"; do
   echo "Launching $script"
   "$PYTHON_BIN" "$SCRIPT_DIR/$script" &
   pids+=("$!")
 done
+
+echo "Waiting 5 seconds for base layers to initialize..."
+sleep 5
+
+echo "=== Starting gold layer job ==="
+for script in "${GOLD_SCRIPTS[@]}"; do
+  echo "Launching $script"
+  "$PYTHON_BIN" "$SCRIPT_DIR/$script" &
+  pids+=("$!")
+done
+
+echo "Waiting 5 seconds for gold layer to initialize..."
+sleep 5
+
+echo "=== Starting publishing jobs ==="
+for script in "${PUBLISH_SCRIPTS[@]}"; do
+  echo "Launching $script"
+  "$PYTHON_BIN" "$SCRIPT_DIR/$script" &
+  pids+=("$!")
+done
+
+echo "All Spark jobs started."
 
 terminate() {
   echo "Stopping Spark jobs"

@@ -17,17 +17,6 @@
       font-size: 1.8rem;
       margin: 0 0 0.5rem 0;
     }
-    form {
-      margin-bottom: 1.5rem;
-    }
-    .inline-form {
-      display: inline;
-      margin: 0;
-    }
-    .inline-form button {
-      padding: 0.3rem 0.8rem;
-      font-size: 0.85rem;
-    }
     button {
       background-color: #0b7285;
       border: none;
@@ -114,79 +103,22 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
-    .toggle-container {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    .toggle-switch {
-      position: relative;
-      width: 44px;
-      height: 24px;
-    }
-    .toggle-switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #ccc;
-      transition: 0.3s;
-      border-radius: 24px;
-    }
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 18px;
-      width: 18px;
-      left: 3px;
-      bottom: 3px;
-      background-color: white;
-      transition: 0.3s;
-      border-radius: 50%;
-    }
-    input:checked + .slider {
-      background-color: #0b7285;
-    }
-    input:checked + .slider:before {
-      transform: translateX(20px);
-    }
-    .refresh-status {
-      font-size: 0.85rem;
-      color: #666;
+    .action-btn {
+      width: 100px;
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Marketing Streams Demo</h1>
-    <p>Trigger a new synthetic order and inspect the consolidated customer view produced by ksqlDB.</p>
+    <p>Simulates customer lifecycle using event streaming and Delta Lake.</p>
   </header>
 
   <div class="card">
-    <form method="post">
-      <input type="hidden" name="action" value="order_new">
-      <button type="submit">Create New Customer &amp; Order</button>
-    </form>
+    <button type="button" id="createCustomerBtn">Create New Customer</button>
   </div>
 
-  {% if success_messages %}
-    {% for message in success_messages %}
-      <div class="alert success">{{ message }}</div>
-    {% endfor %}
-  {% endif %}
-
-  {% if error_messages %}
-    {% for message in error_messages %}
-      <div class="alert error">{{ message }}</div>
-    {% endfor %}
-  {% endif %}
+  <div id="statusMessages"></div>
 
   {% if data_error %}
     <div class="alert error">
@@ -194,24 +126,28 @@
     </div>
   {% else %}
     <div class="card">
-      <h2>Consolidated Customers (limit {{ result_limit }})</h2>
-      {% if customers %}
-        <div style="overflow-x: auto;">
-          <table>
-            <thead>
-              <tr>
-                <th>Customer ID</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Lifecycle Stage</th>
-                <th>Status</th>
-                <th>Orders</th>
-                <th>Lifetime Value</th>
-                <th>Last Order</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
+      <h2>
+        Consolidated Customers (limit {{ result_limit }})
+        <span class="spinner hidden" id="refreshSpinner"></span>
+      </h2>
+      <div style="overflow-x: auto;">
+        <table id="customersTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Lifecycle</th>
+              <th>Status</th>
+              <th>Orders</th>
+              <th>LTV</th>
+              <th>Last Order</th>
+              <th>Activations</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="customersBody">
+            {% if customers %}
               {% for row in customers %}
                 <tr>
                   <td>{{ row.customer_id }}</td>
@@ -238,104 +174,314 @@
                     {% endif %}
                   </td>
                   <td>
-                    <form method="post" class="inline-form">
-                      <input type="hidden" name="action" value="order_existing">
-                      <input type="hidden" name="customer_id" value="{{ row.customer_id }}">
-                      <button type="submit">Add Order</button>
-                    </form>
+                    {% set delivered = row.delivered_messages or 0 %}
+                    {% set failed = row.failed_messages or 0 %}
+                    {% set total = delivered + failed %}
+                    {% if total > 0 %}
+                      {% set rate = (delivered / total * 100) | int %}
+                      <div>Total: {{ total }} ({{ rate }}%)</div>
+                      <div><small>✓ {{ delivered }} / ✗ {{ failed }}</small></div>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    <p><button type="button" class="action-btn" data-action="order" data-customer-id="{{ row.customer_id }}">Buy</button></p>
+                    <p><button type="button" class="action-btn" data-action="engage" data-customer-id="{{ row.customer_id }}">Engage</button></p>
                   </td>
                 </tr>
               {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p>No consolidated customers found yet. Use the button above to create the first profile.</p>
-      {% endif %}
+            {% else %}
+              <tr>
+                <td colspan="10">No consolidated customers found yet. Use the button above to create the first profile.</td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
     </div>
   {% endif %}
 
-  <div class="refresh-control">
-    <div class="toggle-container">
-      <label class="toggle-switch">
-        <input type="checkbox" id="autoRefreshToggle" checked>
-        <span class="slider"></span>
-      </label>
-      <label for="autoRefreshToggle" style="cursor: pointer;">Auto-refresh</label>
-    </div>
-    <div class="spinner" id="refreshSpinner"></div>
-    <span class="refresh-status" id="refreshStatus">Next refresh in <span id="countdown">5</span>s</span>
-    <button onclick="manualRefresh()" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">Refresh Now</button>
-  </div>
-
   <script>
-    let refreshInterval = null;
-    let countdownInterval = null;
-    let secondsRemaining = 5;
-    const REFRESH_SECONDS = 5;
-
-    function updateCountdown() {
-      secondsRemaining--;
-      if (secondsRemaining <= 0) {
-        secondsRemaining = REFRESH_SECONDS;
-      }
-      document.getElementById('countdown').textContent = secondsRemaining;
-    }
+    const messagesContainer = document.getElementById('statusMessages');
+    const customersTable = document.getElementById('customersTable');
+    const customersBody = document.getElementById('customersBody');
+    const createCustomerBtn = document.getElementById('createCustomerBtn');
+    const refreshSpinner = document.getElementById('refreshSpinner');
+    const POLL_INTERVAL_MS = 5000;
+    let pollTimer = null;
+    let refreshInFlight = false;
 
     function showSpinner() {
-      document.getElementById('refreshSpinner').classList.remove('hidden');
+      if (refreshSpinner) {
+        refreshSpinner.classList.remove('hidden');
+      }
     }
 
     function hideSpinner() {
-      document.getElementById('refreshSpinner').classList.add('hidden');
-    }
-
-    function manualRefresh() {
-      showSpinner();
-      location.reload();
-    }
-
-    function startAutoRefresh() {
-      secondsRemaining = REFRESH_SECONDS;
-      document.getElementById('countdown').textContent = secondsRemaining;
-
-      if (refreshInterval) clearInterval(refreshInterval);
-      if (countdownInterval) clearInterval(countdownInterval);
-
-      countdownInterval = setInterval(updateCountdown, 1000);
-
-      refreshInterval = setInterval(() => {
-        showSpinner();
-        location.reload();
-      }, REFRESH_SECONDS * 1000);
-
-      document.getElementById('refreshStatus').style.display = 'inline';
-    }
-
-    function stopAutoRefresh() {
-      if (refreshInterval) {
-        clearInterval(refreshInterval);
-        refreshInterval = null;
+      if (refreshSpinner) {
+        refreshSpinner.classList.add('hidden');
       }
-      if (countdownInterval) {
-        clearInterval(countdownInterval);
-        countdownInterval = null;
-      }
-      document.getElementById('refreshStatus').style.display = 'none';
-      hideSpinner();
     }
 
-    document.getElementById('autoRefreshToggle').addEventListener('change', function(e) {
-      if (e.target.checked) {
-        startAutoRefresh();
+    function showMessage(text, type = 'success') {
+      if (!text) {
+        return;
+      }
+      const alert = document.createElement('div');
+      alert.className = `alert ${type === 'error' ? 'error' : 'success'}`;
+      alert.textContent = text;
+      messagesContainer.appendChild(alert);
+      setTimeout(() => {
+        alert.classList.add('hidden');
+        alert.remove();
+      }, 8000);
+    }
+
+    function textCell(value) {
+      const td = document.createElement('td');
+      td.textContent = value ?? '—';
+      return td;
+    }
+
+    function lifecycleCell(row) {
+      const td = document.createElement('td');
+      td.textContent = row.lifecycle_stage || '—';
+      return td;
+    }
+
+    function statusCell(row) {
+      const td = document.createElement('td');
+      if (row.is_active === null || row.is_active === undefined) {
+        td.textContent = '—';
       } else {
-        stopAutoRefresh();
+        td.textContent = row.is_active ? 'Active' : 'Inactive';
+      }
+      return td;
+    }
+
+    function lastOrderCell(row) {
+      const td = document.createElement('td');
+      if (row.last_order_at) {
+        const divMain = document.createElement('div');
+        divMain.textContent = row.last_order_at;
+        const divCode = document.createElement('div');
+        const code = document.createElement('code');
+        code.textContent = row.last_order_ts ?? '';
+        divCode.appendChild(code);
+        td.appendChild(divMain);
+        td.appendChild(divCode);
+      } else {
+        td.textContent = '—';
+      }
+      return td;
+    }
+
+    function activationsCell(row) {
+      const td = document.createElement('td');
+      const delivered = Number(row.delivered_messages || 0);
+      const failed = Number(row.failed_messages || 0);
+      const total = delivered + failed;
+      if (total > 0) {
+        const rate = Math.floor((delivered / total) * 100);
+        const totalDiv = document.createElement('div');
+        totalDiv.textContent = `Total: ${total} (${rate}%)`;
+        const detailDiv = document.createElement('div');
+        const small = document.createElement('small');
+        small.textContent = `✓ ${delivered} / ✗ ${failed}`;
+        detailDiv.appendChild(small);
+        td.appendChild(totalDiv);
+        td.appendChild(detailDiv);
+      } else {
+        td.textContent = '—';
+      }
+      return td;
+    }
+
+    function renderCustomers(customers) {
+      if (!customersBody) {
+        return;
+      }
+      customersBody.innerHTML = '';
+      if (!Array.isArray(customers) || customers.length === 0) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 10;
+        cell.textContent = 'No consolidated customers found yet. Use the button above to create the first profile.';
+        row.appendChild(cell);
+        customersBody.appendChild(row);
+        return;
+      }
+
+      customers.forEach((row) => {
+        const tr = document.createElement('tr');
+        const fullName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
+        tr.appendChild(textCell(row.customer_id));
+        tr.appendChild(textCell(fullName || '—'));
+        tr.appendChild(textCell(row.email || '—'));
+        tr.appendChild(lifecycleCell(row));
+        tr.appendChild(statusCell(row));
+        tr.appendChild(textCell(row.order_count ?? 0));
+        const ltvCell = document.createElement('td');
+        ltvCell.textContent = row.lifetime_value !== null && row.lifetime_value !== undefined ? Number(row.lifetime_value).toFixed(2) : '—';
+        tr.appendChild(ltvCell);
+        tr.appendChild(lastOrderCell(row));
+        tr.appendChild(activationsCell(row));
+
+        const actionsTd = document.createElement('td');
+        const buyBtn = document.createElement('button');
+        buyBtn.type = 'button';
+        buyBtn.className = 'action-btn';
+        buyBtn.dataset.action = 'order';
+        buyBtn.dataset.customerId = row.customer_id;
+        buyBtn.textContent = 'Buy';
+
+        const engageBtn = document.createElement('button');
+        engageBtn.type = 'button';
+        engageBtn.className = 'action-btn';
+        engageBtn.dataset.action = 'engage';
+        engageBtn.dataset.customerId = row.customer_id;
+        engageBtn.textContent = 'Engage';
+
+        const buyWrapper = document.createElement('p');
+        buyWrapper.appendChild(buyBtn);
+        const engageWrapper = document.createElement('p');
+        engageWrapper.appendChild(engageBtn);
+
+        actionsTd.appendChild(buyWrapper);
+        actionsTd.appendChild(engageWrapper);
+        tr.appendChild(actionsTd);
+        customersBody.appendChild(tr);
+      });
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const response = await fetch(url, options);
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (err) {
+        data = null;
+      }
+      if (!response.ok) {
+        const errorMessage = data && data.error ? data.error : response.statusText;
+        const error = new Error(errorMessage);
+        error.status = response.status;
+        error.payload = data;
+        throw error;
+      }
+      return data || {};
+    }
+
+    async function refreshCustomers(force = false) {
+      if (refreshInFlight && !force) {
+        return;
+      }
+      refreshInFlight = true;
+      showSpinner();
+      try {
+        const payload = await fetchJSON('/api/customers');
+        renderCustomers(payload.customers || []);
+        if (payload.error) {
+          showMessage(payload.error, 'error');
+        }
+      } catch (err) {
+        showMessage(err.message || 'Unable to load customers.', 'error');
+      } finally {
+        hideSpinner();
+        refreshInFlight = false;
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
+      pollTimer = setInterval(() => {
+        refreshCustomers();
+      }, POLL_INTERVAL_MS);
+    }
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    async function handleCreateCustomer() {
+      createCustomerBtn.disabled = true;
+      try {
+        const payload = await fetchJSON('/api/customers', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({}),
+        });
+        if (payload.message) {
+          showMessage(payload.message, 'success');
+        }
+        await refreshCustomers(true);
+      } catch (err) {
+        showMessage(err.message || 'Failed to create customer.', 'error');
+      } finally {
+        createCustomerBtn.disabled = false;
+      }
+    }
+
+    async function handleRowAction(action, customerId, button) {
+      if (!customerId) {
+        showMessage('Missing customer id.', 'error');
+        return;
+      }
+      button.disabled = true;
+      const endpoint = action === 'order'
+        ? `/api/customers/${encodeURIComponent(customerId)}/order`
+        : `/api/customers/${encodeURIComponent(customerId)}/engage`;
+      try {
+        const payload = await fetchJSON(endpoint, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({}),
+        });
+        if (payload.message) {
+          showMessage(payload.message, 'success');
+        }
+        await refreshCustomers(true);
+      } catch (err) {
+        showMessage(err.message || 'Action failed.', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    if (createCustomerBtn) {
+      createCustomerBtn.addEventListener('click', handleCreateCustomer);
+    }
+
+    if (customersTable) {
+      customersTable.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-action][data-customer-id]');
+        if (!button) {
+          return;
+        }
+        const action = button.dataset.action;
+        const customerId = button.dataset.customerId;
+        handleRowAction(action, customerId, button);
+      });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        refreshCustomers(true);
+        startPolling();
       }
     });
 
-    // Start auto-refresh on page load
-    hideSpinner();
-    startAutoRefresh();
+    refreshCustomers(true).then(() => {
+      startPolling();
+    });
   </script>
 </body>
 </html>

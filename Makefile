@@ -1,6 +1,7 @@
-.PHONY: up down schemas topics seed seed-random ksql spark clear clean-state webapp webapp-local
+.PHONY: up down schemas topics ksql spark clear clean-state webapp webapp-local
 
 up:
+	mkdir -p data/redpanda data/redis
 	docker compose up -d --build
 	bash scripts/register_schemas.sh
 	bash scripts/create_topics.sh
@@ -12,14 +13,6 @@ down:
 
 schemas:
 	bash scripts/register_schemas.sh
-
-seed:
-	bash scripts/seed_customer.sh
-	bash scripts/seed_order.sh
-	bash scripts/seed_activation.sh
-
-seed-random:
-	bash scripts/seed_random_order.sh
 
 topics:
 	bash scripts/create_topics.sh
@@ -38,7 +31,7 @@ clean-state:
 	rm -rf .checkpoints
 	rm -rf delta
 	rm -rf /tmp/delta
-	rm -rf ~/.img-data/redpanda
+	rm -rf data
 
 webapp:
 	docker compose up --build webapp

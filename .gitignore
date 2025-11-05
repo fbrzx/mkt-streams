@@ -1,3 +1,5 @@
 .venv
-delta/
-.checkpoints/
+.checkpoints
+.claude
+delta
+data

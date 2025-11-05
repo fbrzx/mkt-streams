@@ -1,115 +1,242 @@
-# Marketing Engine Demo
+# Marketing Streams Demo
 
-Local sandbox to showcase a marketing event pipeline: REST-based seed scripts publish Avro payloads to Redpanda, ksqlDB enriches the streams, and Spark Structured Streaming materialises Delta Lake gold tables plus a propensity-scoring topic.
+A real-time marketing data pipeline demonstrating event streaming, stream processing, and customer analytics using Kafka, ksqlDB, Spark, and Delta Lake.
 
-## Architecture Overview
+## Overview
+
+This project simulates a marketing platform where you can:
+- Create customer profiles
+- Add orders to track customer purchases
+- Simulate marketing engagements (email, SMS, push notifications)
+- View real-time aggregated customer metrics
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    Seed[Seed Scripts<br/>make seed] --> REST[Kafka REST Proxy]
-    REST --> RP[(Redpanda Topics)]
-    Seed -. schema lookups .-> Schema[Schema Registry]
-    REST -. schema lookups .-> Schema
-    RP --> KSQL[ksqlDB Streams/Tables]
-    KSQL --> Segment[Segment Materialization]
-    RP --> SparkIngest[Bronze Ingest Stream]
-    SparkIngest --> SparkSilver[Silver Merge Stream]
-    SparkSilver --> SparkGold[Gold C360 Stream]
-    SparkGold --> Score[Propensity Scoring Job]
-    Score --> Propensity[[Propensity Score Topic]]
-    Propensity --> RP
-    RP --> KafkaUI[Kafka UI]
-    SparkIngest --> Delta[(Delta Tables)]
-    SparkSilver --> Delta
-    SparkGold --> Delta
-    SparkSQL[Spark SQL Shell] --> Delta
+    WebUI[Web App<br/>localhost:5000] --> REST[Kafka REST Proxy]
+    REST --> RP[(Redpanda/Kafka)]
+    REST -. schema validation .-> Schema[Schema Registry]
+    RP --> KSQL[ksqlDB<br/>Real-time Aggregation]
+    KSQL --> Redis[(Redis Cache)]
+    Redis --> WebUI
+    RP --> Spark[Spark Streaming<br/>Bronze → Silver → Gold]
+    Spark --> Delta[(Delta Lake)]
+    Spark -- gold publish --> RP
 ```
 
-- Seed scripts hit the REST Proxy using Schema Registry for Avro payloads.
-- ksqlDB builds the customer profile cache, order summary tables, and downstream segment topics.
-- Spark jobs ingest the Kafka topics into Delta bronze/silver/gold layers and emit propensity scores.
-- Kafka UI and Spark SQL offer visibility into the live event streams and Delta snapshots.
+### Data Flow
 
-## Demo walkthrough
+1. **Web App** - User creates customers, orders, and engagements
+2. **Kafka Topics** - Events published to domain topics with Avro schemas
+3. **ksqlDB** - Real-time stream processing and aggregation
+4. **Spark** - Processes events through medallion architecture (bronze → silver → gold)
+5. **Gold Layer Publishing** - Spark publishes enriched C360 data to Kafka
+6. **Redis Cache** - Stores gold layer customer view for fast UI updates
 
-All setup commands, step-by-step narratives, and SQL snippets now live in [`DEMO.md`](DEMO.md). Use that guide to spin up the stack (`make up`), explore the helper UI on port 5000, seed example data, and run the consolidated ksqlDB query that surfaces customer names and order metrics.
+## Quick Start
 
-The web UI keeps a Redis-backed cache of the consolidated customer view so refreshes stay instant. Point `REDIS_URL` at your shared Redis instance (default: `redis://host.docker.internal:6379/0` when running via Docker).
+### Prerequisites
 
-## Lifecycle Stage Calculation
+- Docker and Docker Compose
+- Make
 
-The **lifecycle_stage** field tracks a customer's journey and is used throughout the pipeline for segmentation and analytics. Here's how it flows through the system:
+### Setup
 
-### 1. Data Source (Initial Assignment)
-When customers are created via the webapp or seed scripts, the lifecycle stage is randomly assigned from these values:
-- `prospect` - Potential customer who hasn't made a purchase
-- `customer` - Active customer with orders
-- `evangelist` - Loyal customer with high engagement
-- `churn-risk` - Customer at risk of leaving
+```bash
+# Start all services (Redpanda, ksqlDB, Schema Registry, Web App, Redis)
+make up
 
-Location: [webapp/app.py:634](webapp/app.py#L634)
-
-### 2. ksqlDB Stream Processing
-The lifecycle stage flows through several ksqlDB streams and tables:
-
-**Stream 1: Customer Profile Source** ([ksql/streams.sql:15-26](ksql/streams.sql#L15-L26))
-- Ingests from `dom.customer.profile.upsert.v1` Kafka topic
-- Extracts `lifecycle_stage` field from Avro payload
-
-**Table 1: Customer Profile** ([ksql/streams.sql:28-39](ksql/streams.sql#L28-L39))
-- Maintains latest profile using `LATEST_BY_OFFSET()`
-- Stores current lifecycle_stage for each customer
-
-**Stream 2: Enriched Orders** ([ksql/streams.sql:67-82](ksql/streams.sql#L67-L82))
-- Joins orders with customer profiles
-- Enriches each order with customer's lifecycle_stage
-
-**Table 2: Consolidated Customer** ([ksql/streams.sql:94-112](ksql/streams.sql#L94-L112))
-- Aggregates order metrics by customer
-- Includes lifecycle_stage in consolidated view
-
-**Stream 3: Segment Materialization** ([ksql/streams.sql:140-157](ksql/streams.sql#L140-L157))
-- Uses lifecycle_stage in CASE statements for advanced segmentation
-- Example: High-value evangelists vs. at-risk customers
-
-### 3. Spark Processing
-The Spark jobs pass through the lifecycle_stage without modification:
-
-**Gold Layer C360** ([spark/gold_c360.py:73](spark/gold_c360.py#L73))
-- Selects lifecycle_stage from customers Delta table
-- Includes in 360-degree customer view
-- No transformation - preserves original value
-
-### 4. Web Display
-The Flask webapp displays lifecycle_stage in the consolidated customer table:
-
-**Backend** ([webapp/app.py:187-194](webapp/app.py#L187-L194))
-- Reads from Redis cache (populated by Kafka consumer)
-- Normalizes field extraction from various sources
-
-**Frontend** ([webapp/templates/index.html:134-148](webapp/templates/index.html#L134-L148))
-- Displays in 4th column of customer table
-- Shows current lifecycle stage for each customer
-
-### Data Flow Summary
-```
-Seed/Webapp (Random Assignment)
-    ↓
-Kafka Topic: dom.customer.profile.upsert.v1
-    ↓
-ksqlDB: S_CUSTOMER_PROFILE_SOURCE (stream)
-    ↓
-ksqlDB: T_CUSTOMER_PROFILE (table - LATEST_BY_OFFSET)
-    ↓
-ksqlDB: S_CUSTOMER_ORDER_ENRICHED (stream - joined with orders)
-    ↓
-ksqlDB: T_CUSTOMER_CONSOLIDATED (table - aggregated)
-    ↓
-Kafka Topic: dom.customer.consolidated.v1
-    ↓
-Redis Cache (via Kafka consumer thread)
-    ↓
-Flask Webapp (display in UI)
+# Open the web app
+open http://localhost:5000
 ```
 
-**Note**: The lifecycle_stage is currently set randomly at creation time and flows through the pipeline unchanged. In a production system, this would be dynamically calculated based on customer behavior, purchase patterns, engagement metrics, and predictive models.
+The web app provides three actions:
+- **Create New Customer** - Creates a prospect with `is_active=false` and `lifetime_value=0`
+- **Add Order** - Generates a random order for a customer (updates metrics)
+- **Engage** - Simulates marketing engagement (email, SMS, push, in-app)
+
+For custom deployments, export a `FLASK_SECRET_KEY` so session-based status banners persist across restarts:
+
+```bash
+export FLASK_SECRET_KEY="$(openssl rand -hex 32)"
+```
+
+### Run Spark Jobs
+
+**Important**: Spark jobs are required for the webapp to function properly as it consumes from the gold layer.
+
+```bash
+make spark
+```
+
+This starts Spark Structured Streaming jobs that:
+- Ingest events into Delta Lake (bronze layer)
+- Transform and merge data (silver layer)
+- Create customer 360 views with engagement metrics (gold layer)
+- Publish gold C360 data to `dom.customer.gold.v1` topic for webapp consumption
+- Calculate propensity scores based on orders, LTV, and engagement success
+
+Activation metrics spin up automatically once the silver `activations` table appears (after the first engagement event). The gold job keeps watching for the table, so you do not need to restart Spark when activations arrive later. The web app also updates its Redis cache immediately after publishing an engagement, so delivered/failed counters update right away while the streaming jobs reconcile the persisted view.
+
+By default the web app preserves cached Redis data between restarts. If you need to clear the cache on launch, start the container with `RESET_CACHE_ON_START=1`.
+
+## Architecture Details
+
+### Kafka Topics
+
+| Topic | Schema | Description |
+|-------|--------|-------------|
+| `dom.customer.profile.upsert.v1` | Avro | Customer profile updates |
+| `dom.order.placed.v1` | Avro | Order events |
+| `dom.activation.delivery.status.v1` | Avro | Marketing engagement events |
+| `dom.customer.consolidated.v1` | JSON | Aggregated customer metrics (ksqlDB output) |
+| `dom.customer.gold.v1` | JSON | Gold layer C360 from Spark (webapp data source) |
+| `dom.propensity.score.v1` | JSON | Customer propensity scores |
+| `dom.segment.materialized.v1` | Avro | Customer segments |
+
+### ksqlDB Streams & Tables
+
+The ksqlDB topology creates:
+- Customer profile table with LATEST_BY_OFFSET aggregation
+- Order summary aggregations (lifetime value, order count)
+- Activation/engagement summary (delivered vs failed messages)
+- Consolidated customer table joining all metrics
+- Segment materialization based on business rules
+
+### Spark Jobs
+
+Located in `spark/`:
+- `ingest_stream.py` - Bronze layer: Raw event ingestion from Kafka to Delta
+- `silver_customers_orders.py` - Silver layer: Curated data with UPSERT operations
+- `gold_c360.py` - Gold layer: Customer 360 view with order and engagement metrics
+- `publish_c360.py` - Publishes gold C360 data to `dom.customer.gold.v1` for webapp
+- `score_and_publish.py` - Calculates propensity scores and publishes to Kafka
+
+### Web Application
+
+Built with Flask, the web app:
+- Displays real-time customer data from Redis cache (sourced from Spark gold layer)
+- Publishes events to Kafka via REST Proxy (customer profiles, orders, engagements)
+- Consumes gold C360 data from `dom.customer.gold.v1` topic
+- Shows customer metrics: orders, lifetime value, engagement stats, lifecycle stage
+
+## Available Commands
+
+```bash
+make up          # Start all services
+make down        # Stop services (preserve data)
+make clear       # Stop services and remove all data
+make spark       # Run Spark streaming jobs
+make ksql        # Reapply ksqlDB topology
+make schemas     # Register Avro schemas
+make topics      # Create Kafka topics
+make webapp      # Run web app in Docker
+make webapp-local # Run web app locally (requires Python deps)
+```
+
+## Accessing Services
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Web App | http://localhost:5001 | Customer management UI |
+| Kafka UI | http://localhost:8080 | Browse topics and messages |
+| ksqlDB Server | http://localhost:8088 | ksqlDB REST API |
+| Schema Registry | http://localhost:8081 | Avro schema registry |
+| REST Proxy | http://localhost:8082 | Kafka REST API |
+
+## Customer Lifecycle
+
+New customers start as:
+- **Lifecycle Stage**: `prospect`
+- **Status**: `inactive`
+- **Lifetime Value**: `$0.00`
+- **Orders**: `0`
+
+As customers place orders, their lifecycle stage automatically updates:
+
+### Lifecycle Stage Rules
+
+Lifecycle stages progress based on orders, lifetime value, and engagement success:
+
+| Stage | Criteria | Description |
+|-------|----------|-------------|
+| **prospect** | 0 orders | New customer, hasn't made first purchase |
+| **customer** | 1+ orders | Active customer with purchase history |
+| **engaged** | 1+ orders AND engagement rate > 50% | Customer actively responding to marketing |
+| **high-value** | LTV > $5000 AND engagement rate < 70% | High-spending customer with moderate engagement |
+| **evangelist** | LTV > $5000 AND engagement rate ≥ 70% | Top-tier customer: high spending and highly engaged |
+
+**Engagement Rate** = Successful activations / Total activations (email, SMS, push, in-app)
+
+### Automatic Updates
+
+**When you click "Add Order":**
+1. Order is created and published to Kafka
+2. Lifetime value increases
+3. Order count increments
+4. Customer becomes **active** (if previously inactive)
+5. **Lifecycle stage recalculates** based on orders, LTV, and engagement history
+6. Updated profile publishes to Kafka (if stage changed)
+7. Changes flow through ksqlDB → Redis → Web UI
+
+**When you click "Engage":**
+1. Random engagement is created (75% success rate)
+2. Engagement published to Kafka (email, SMS, push, or in-app)
+3. Spark processes engagement → updates gold C360
+4. Higher engagement success rate helps progression to **engaged** and **evangelist** stages
+
+## Data Storage
+
+### ksqlDB State
+ksqlDB maintains in-memory state stores for tables and streams, backed by Kafka topics.
+
+### Spark Delta Lake
+When running `make spark`, data is stored in:
+```
+delta/
+├── bronze/     # Raw events from Kafka
+├── silver/     # Curated, deduplicated data
+└── gold/       # Aggregated customer 360 views
+```
+
+### Redis Cache
+The web app caches the gold layer customer view in Redis for instant page loads. The cache is kept in sync via a background Kafka consumer thread that reads from `dom.customer.gold.v1`.
+
+## Troubleshooting
+
+**Web app shows no customers?**
+- Create your first customer using the "Create New Customer" button
+- Check that ksqlDB is running: `docker compose ps`
+
+**ksqlDB errors?**
+- Reapply topology: `make ksql`
+- Check ksqlDB logs: `docker compose logs ksqldb`
+
+**Schema errors?**
+- Re-register schemas: `make schemas`
+
+**Fresh start needed?**
+```bash
+make clear    # Removes all data and stops services
+make up       # Restart from clean slate
+```
+
+## Project Structure
+
+```
+.
+├── ksql/               # ksqlDB stream definitions
+├── schemas/            # Avro schema definitions
+├── scripts/            # Setup scripts (topics, schemas, ksqlDB)
+├── spark/              # Spark Structured Streaming jobs
+├── webapp/             # Flask web application
+│   ├── app.py         # Main application
+│   └── templates/     # HTML templates
+├── docker-compose.yml  # Service definitions
+└── Makefile           # Build and run commands
+```
+
+## License
+
+This is a demonstration project to get my head around delta lake, spark and kafka streams.

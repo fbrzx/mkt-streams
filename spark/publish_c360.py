@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -8,7 +9,7 @@ from common import checkpoint_path, gold_path, kafka_bootstrap_servers, topic_co
 
 def build_spark_session() -> SparkSession:
     builder = (
-        SparkSession.builder.appName("ScoreAndPublish")
+        SparkSession.builder.appName("PublishC360")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     )
@@ -27,42 +28,34 @@ def main():
     print("Waiting for gold C360 table to be created by gold_c360.py...", flush=True)
     wait_for_delta(gold_path("c360"), timeout=300)  # Increased timeout to 5 minutes
 
+    # Additional wait to ensure there's some data in the table
+    print("Waiting for initial data in gold C360 table...", flush=True)
+    time.sleep(10)
+
     gold_stream = spark.readStream.format("delta").load(gold_path("c360"))
 
-    propensity = (
-        gold_stream.select(
-            F.col("customer_id").alias("customer_id"),
-            F.col("email"),
-            F.col("lifecycle_stage"),
-            F.col("lifetime_value"),
-            F.col("order_count"),
-            F.col("delivered_messages"),
-            F.col("failed_messages"),
-            (
-                F.col("lifetime_value") / F.lit(150.0)
-                + F.col("order_count") * F.lit(0.75)
-                + (F.col("delivered_messages") - F.col("failed_messages")) * F.lit(0.25)
-            ).alias("raw_score"),
-            F.current_timestamp().alias("scored_at"),
-        )
-        .withColumn("propensity", 1 / (1 + F.exp(-F.col("raw_score"))))
-        .drop("raw_score")
-    )
-
-    output = propensity.select(
+    # Transform to match the format expected by the webapp
+    # Convert timestamp to milliseconds for last_order_ts
+    output = gold_stream.select(
         F.col("customer_id").cast("string").alias("key"),
         F.to_json(
             F.struct(
                 F.col("customer_id"),
                 F.col("email"),
+                F.col("first_name"),
+                F.col("last_name"),
                 F.col("lifecycle_stage"),
-                F.round(F.col("propensity"), 4).alias("propensity"),
-                F.col("scored_at"),
+                F.col("is_active"),
+                F.col("lifetime_value"),
+                F.col("order_count"),
+                (F.col("last_order_at") * 1000).cast("bigint").alias("last_order_ts"),
+                F.col("delivered_messages"),
+                F.col("failed_messages"),
             )
         ).alias("value"),
     )
 
-    topic = topic_config("dom.propensity.score.v1", "PROPENSITY_TOPIC")
+    topic = topic_config("dom.customer.gold.v1", "GOLD_C360_TOPIC")
 
     wait_for_topic(topic)
 
@@ -70,7 +63,7 @@ def main():
         output.writeStream.format("kafka")
         .option("kafka.bootstrap.servers", kafka_bootstrap_servers())
         .option("topic", topic)
-        .option("checkpointLocation", checkpoint_path("gold", "propensity"))
+        .option("checkpointLocation", checkpoint_path("gold", "publish_c360"))
         .outputMode("update")
         .start()
     )

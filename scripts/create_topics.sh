@@ -11,6 +11,8 @@ REQUIRED_TOPICS=(
   "dom.customer.order.enriched.v1"
   "dom.segment.source.v1"
   "dom.segment.materialized.v1"
+  "dom.customer.gold.v1"
+  "dom.propensity.score.v1"
 )
 
 wait_for_redpanda() {
